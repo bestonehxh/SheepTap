@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 private final class StatusMenuController: NSObject, NSMenuDelegate {
     private let monitor: NetworkMonitor
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let menu = NSMenu()
+    private let menu: NSMenu
     // Concrete root view rather than `AnyView`: type-erasing the root defeats
     // SwiftUI's structural diffing, so every interface update tore down and
     // rebuilt the whole subtree instead of updating the rows that changed.
@@ -78,7 +78,13 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
 
     init(monitor: NetworkMonitor) {
         self.monitor = monitor
-        hostingView = NSHostingView(rootView: ContentView(monitor: monitor))
+        // A local so the closure can capture the menu before `self` is fully
+        // initialised; the menu owns the view, so `weak` keeps it from cycling.
+        let menu = NSMenu()
+        self.menu = menu
+        hostingView = NSHostingView(rootView: ContentView(monitor: monitor) { [weak menu] in
+            menu?.cancelTracking()
+        })
 
         super.init()
 

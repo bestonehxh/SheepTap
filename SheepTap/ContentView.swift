@@ -12,6 +12,9 @@ enum MenuMetrics {
 
 struct ContentView: View {
     let monitor: NetworkMonitor
+    /// Closes the status menu after a tap opens System Settings. A custom view
+    /// inside an `NSMenuItem` does not end menu tracking on its own.
+    var dismissMenu: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +27,7 @@ struct ContentView: View {
                             .background(Color.primary.opacity(0.12))
                             .padding(.horizontal, 20)
                     }
-                    InterfaceCard(interface: iface, isFirst: idx == 0)
+                    InterfaceCard(interface: iface, isFirst: idx == 0, dismissMenu: dismissMenu)
                 }
             }
         }
@@ -55,6 +58,9 @@ private struct NoConnectionView: View {
 struct InterfaceCard: View {
     let interface: NetworkInterface
     var isFirst = false
+    var dismissMenu: () -> Void = {}
+
+    @State private var iconHovered = false
 
     var accentColor: Color {
         switch interface.type {
@@ -69,14 +75,26 @@ struct InterfaceCard: View {
         VStack(spacing: 0) {
             // ── Centered icon + label ──────────────────────────────────
             VStack(spacing: 3) {
+                // Tapping the icon opens the matching System Settings pane.
                 ZStack {
                     Circle()
-                        .fill(accentColor.opacity(0.15))
+                        .fill(accentColor.opacity(iconHovered ? 0.3 : 0.15))
                         .frame(width: 40, height: 40)
                     Image(systemName: interface.icon)
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(accentColor)
                 }
+                .contentShape(Circle())
+                .onHover { hovering in
+                    // Keep push/pop balanced: `openSystemSettings` may already
+                    // have cleared the hover before the exit event arrives.
+                    guard hovering != iconHovered else { return }
+                    iconHovered = hovering
+                    if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .onTapGesture { openSystemSettings() }
+                .help("Open \(interface.typeLabel) settings")
+                .animation(.easeOut(duration: 0.12), value: iconHovered)
 
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(interface.typeLabel)
@@ -113,6 +131,17 @@ struct InterfaceCard: View {
             }
             .padding(.bottom, 10)
         }
+    }
+
+    private func openSystemSettings() {
+        // Pop the hover cursor first: the menu closes underneath the pointer,
+        // so `onHover(false)` never fires and the hand would stick.
+        if iconHovered {
+            iconHovered = false
+            NSCursor.pop()
+        }
+        dismissMenu()
+        NSWorkspace.shared.open(interface.systemSettingsURL)
     }
 }
 

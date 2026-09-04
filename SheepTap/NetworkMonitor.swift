@@ -17,6 +17,10 @@ nonisolated struct NetworkInterface: Identifiable, Equatable, Sendable {
     let gateway: String
     let dns: [String]
     let macAddress: String
+    /// The System Configuration service ID (a UUID) behind this interface, when
+    /// the interface belongs to a configured network service. Tunnels created
+    /// by Network Extension VPNs have none.
+    var serviceID: String? = nil
 
     enum InterfaceType: Equatable, Sendable {
         case wifi(ssid: String?)
@@ -46,6 +50,36 @@ nonisolated struct NetworkInterface: Identifiable, Equatable, Sendable {
     var ssid: String? {
         if case .wifi(let s) = type { return s }
         return nil
+    }
+
+    /// The System Settings location that manages this interface.
+    ///
+    /// The query after `?` is handed verbatim to the pane's `revealElement`.
+    /// Wi-Fi's `General_Details` key opens the Details sheet of the network
+    /// currently joined, so a connected Wi-Fi lands on its own SSID. It is used
+    /// regardless of whether `ssid` is known: reading the SSID needs Location
+    /// permission, so it is usually nil even while joined, and an interface only
+    /// reaches this list once it holds an IP address.
+    ///
+    /// The Network pane accepts a bare service UUID as the key and pushes that
+    /// service's own page (verified on macOS 26; its named anchors such as
+    /// `?Ethernet` only reveal the first service of a kind). Interfaces with no
+    /// service fall back to the pane's list. VPN has a pane of its own.
+    var systemSettingsURL: URL {
+        let target: String
+        switch type {
+        case .wifi:
+            target = "com.apple.wifi-settings-extension?General_Details"
+        case .vpn:
+            target = "com.apple.NetworkExtensionSettingsUI.NESettingsUIExtension"
+        case .ethernet, .other:
+            if let serviceID {
+                target = "com.apple.Network-Settings.extension?\(serviceID)"
+            } else {
+                target = "com.apple.Network-Settings.extension"
+            }
+        }
+        return URL(string: "x-apple.systempreferences:\(target)")!
     }
 
     /// Presentation order. Kept as a plain rank so the sort predicate is a total
@@ -363,7 +397,8 @@ final class NetworkMonitor {
                 subnetMask: data.subnet,
                 gateway: gateway,
                 dns: dns.isEmpty ? ["N/A"] : dns,
-                macAddress: local.macAddresses[name] ?? topology.macAddresses[name] ?? "N/A"
+                macAddress: local.macAddresses[name] ?? topology.macAddresses[name] ?? "N/A",
+                serviceID: topology.bsdToServiceID[name]
             ))
         }
 

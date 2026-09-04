@@ -27,3 +27,6 @@ xcuserdata/
 
 # VS Code
 .vscode/
+
+# release zips (Tools/release.sh)
+Builds/
