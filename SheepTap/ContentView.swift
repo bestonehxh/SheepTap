@@ -62,6 +62,13 @@ struct InterfaceCard: View {
 
     @State private var iconHovered = false
 
+    /// The SSID when it is known and non-empty. The AirPort store key carries
+    /// an empty `SSID_STR` while joined but without Location permission.
+    private var displaySSID: String? {
+        guard let ssid = interface.ssid, !ssid.isEmpty else { return nil }
+        return ssid
+    }
+
     var accentColor: Color {
         switch interface.type {
         case .wifi:     return Color(red: 0.35, green: 0.78, blue: 1.0)
@@ -85,13 +92,12 @@ struct InterfaceCard: View {
                         .foregroundStyle(accentColor)
                 }
                 .contentShape(Circle())
-                .onHover { hovering in
-                    // Keep push/pop balanced: `openSystemSettings` may already
-                    // have cleared the hover before the exit event arrives.
-                    guard hovering != iconHovered else { return }
-                    iconHovered = hovering
-                    if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                }
+                // `pointerStyle` restores the arrow itself when the menu closes
+                // under the pointer. A manual `NSCursor` push/pop pair depended
+                // on an exit event that a closing menu never delivers, leaving
+                // the stack unbalanced.
+                .pointerStyle(.link)
+                .onHover { iconHovered = $0 }
                 .onTapGesture { openSystemSettings() }
                 .help("Open \(interface.typeLabel) settings")
                 .animation(.easeOut(duration: 0.12), value: iconHovered)
@@ -105,21 +111,18 @@ struct InterfaceCard: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // Fixed-height slot — shows SSID for WiFi, empty gap for Ethernet
-                Group {
-                    if let ssid = interface.ssid, !ssid.isEmpty {
-                        Text(ssid)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Color.clear
-                    }
-                }
-                .frame(height: 8)
+                // Fixed-height slot — shows the SSID for Wi-Fi, an equally tall
+                // gap otherwise. An invisible placeholder sizes the slot to the
+                // font's real line height; the old 8-point frame let a 12-point
+                // label spill over the interface name above it.
+                Text(displaySSID ?? " ")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .opacity(displaySSID == nil ? 0 : 1)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, isFirst ? 0 : 12)
-            .padding(.bottom, 4)
 
             // ── Detail rows ───────────────────────────────────────────
             VStack(spacing: 0) {
@@ -134,12 +137,9 @@ struct InterfaceCard: View {
     }
 
     private func openSystemSettings() {
-        // Pop the hover cursor first: the menu closes underneath the pointer,
-        // so `onHover(false)` never fires and the hand would stick.
-        if iconHovered {
-            iconHovered = false
-            NSCursor.pop()
-        }
+        // The menu closes underneath the pointer, so no exit event will clear
+        // the highlight before the next open.
+        iconHovered = false
         dismissMenu()
         NSWorkspace.shared.open(interface.systemSettingsURL)
     }
@@ -180,7 +180,9 @@ private struct DNSRows: View {
         HStack(alignment: .top, spacing: 0) {
             RowLabel(text: "DNS")
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(servers.prefix(3), id: \.self) { s in
+                // Keyed by position: a manual DNS list can repeat a server, and
+                // duplicate `\.self` ids make SwiftUI's diffing undefined.
+                ForEach(Array(servers.prefix(3).enumerated()), id: \.offset) { _, s in
                     CopyableText(value: s)
                 }
             }

@@ -44,8 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && !bundlePath.contains("/.Trash/")
 
         guard defaults.bool(forKey: Self.didConfigureLoginItemKey) else {
+            // Decide only from a stable location. Consuming the one-shot flag
+            // on a DerivedData launch left the later /Applications install
+            // unregistered for good: the repair path below only acts on an
+            // item that is already `.enabled`.
+            guard isStableLocation else { return }
             defaults.set(true, forKey: Self.didConfigureLoginItemKey)
-            guard isStableLocation, SMAppService.mainApp.status == .notRegistered else { return }
+            guard SMAppService.mainApp.status == .notRegistered else { return }
             if (try? SMAppService.mainApp.register()) != nil {
                 defaults.set(bundlePath, forKey: Self.registeredLoginItemPathKey)
             }

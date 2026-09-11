@@ -453,7 +453,11 @@ final class NetworkMonitor {
                             &subnetBuf, socklen_t(subnetBuf.count), nil, 0, NI_NUMERICHOST)
             }
             let subnet = Self.string(from: subnetBuf)
-            result.ipData[name] = (ip: ip, subnet: subnet.isEmpty ? "N/A" : subnet)
+            // `getifaddrs` lists an interface's primary address before its
+            // aliases; overwriting on every entry showed the last alias instead.
+            if result.ipData[name] == nil {
+                result.ipData[name] = (ip: ip, subnet: subnet.isEmpty ? "N/A" : subnet)
+            }
         }
 
         return result
