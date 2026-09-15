@@ -212,11 +212,11 @@ private struct MoreToggle: View {
         HStack(spacing: 3) {
             Text(expanded ? "Less" : "More")
             Image(systemName: "chevron.right")
-                .font(.system(size: 8, weight: .semibold))
+                .font(.system(size: 8.5, weight: .regular))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
             Spacer()
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(.system(size: 11.5, weight: .regular))
         .foregroundStyle(hovered ? .primary : .secondary)
         .padding(.horizontal, 14)
         .padding(.top, 4)
@@ -272,9 +272,9 @@ private struct RowLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, design: .monospaced))
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
             .foregroundStyle(.secondary)
-            .frame(width: 58, alignment: .leading)
+            .frame(width: 62, alignment: .leading)
     }
 }
 
@@ -327,7 +327,7 @@ private struct CopyableText: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(value)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
                 .lineLimit(1)
                 .foregroundStyle(.primary)
                 .contentShape(Rectangle())
