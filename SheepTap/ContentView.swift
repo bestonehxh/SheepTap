@@ -27,7 +27,14 @@ struct ContentView: View {
                             .background(Color.primary.opacity(0.12))
                             .padding(.horizontal, 20)
                     }
-                    InterfaceCard(interface: iface, isFirst: idx == 0, dismissMenu: dismissMenu)
+                    InterfaceCard(
+                        interface: iface,
+                        wifi: monitor.wifiDetails[iface.name],
+                        showWiFiDetails: monitor.showWiFiDetails,
+                        isFirst: idx == 0,
+                        toggleWiFiDetails: { monitor.setShowWiFiDetails(!monitor.showWiFiDetails) },
+                        dismissMenu: dismissMenu
+                    )
                 }
             }
         }
@@ -57,17 +64,30 @@ private struct NoConnectionView: View {
 
 struct InterfaceCard: View {
     let interface: NetworkInterface
+    var wifi: WiFiDetails? = nil
+    var showWiFiDetails = false
     var isFirst = false
+    var toggleWiFiDetails: () -> Void = {}
     var dismissMenu: () -> Void = {}
 
     @State private var iconHovered = false
 
+    private var isWiFi: Bool {
+        if case .wifi = interface.type { return true }
+        return false
+    }
+
     /// The SSID when it is known and non-empty. The AirPort store key carries
     /// an empty `SSID_STR` while joined but without Location permission.
     private var displaySSID: String? {
-        guard let ssid = interface.ssid, !ssid.isEmpty else { return nil }
-        return ssid
+        for candidate in [wifi?.ssid, interface.ssid] {
+            if let ssid = candidate, !ssid.isEmpty { return ssid }
+        }
+        return nil
     }
+
+    /// SSID and Wi-Fi generation share the line under the interface name.
+    private var hasSubtitle: Bool { displaySSID != nil || wifi?.generation != nil }
 
     var accentColor: Color {
         switch interface.type {
@@ -115,11 +135,21 @@ struct InterfaceCard: View {
                 // gap otherwise. An invisible placeholder sizes the slot to the
                 // font's real line height; the old 8-point frame let a 12-point
                 // label spill over the interface name above it.
-                Text(displaySSID ?? " ")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .opacity(displaySSID == nil ? 0 : 1)
+                HStack(spacing: 5) {
+                    // The blank placeholder is only for sizing an empty slot;
+                    // beside a lone badge it would push the badge off-centre.
+                    if displaySSID != nil || wifi?.generation == nil {
+                        Text(displaySSID ?? " ")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if let generation = wifi?.generation {
+                        GenerationBadge(text: generation, tint: accentColor)
+                    }
+                }
+                .opacity(hasSubtitle ? 1 : 0)
             }
             .frame(maxWidth: .infinity)
             .padding(.top, isFirst ? 0 : 12)
@@ -131,8 +161,16 @@ struct InterfaceCard: View {
                 InfoRow(label: "Gateway", value: interface.gateway)
                 DNSRows(servers: interface.dns)
                 InfoRow(label: "MAC", value: interface.macAddress)
+
+                if isWiFi, let wifi {
+                    MoreToggle(expanded: showWiFiDetails, action: toggleWiFiDetails)
+                    if showWiFiDetails {
+                        WiFiDetailRows(wifi: wifi)
+                    }
+                }
             }
-            .padding(.bottom, 10)
+            .padding(.top, 2)
+            .padding(.bottom, 8)
         }
     }
 
@@ -145,6 +183,88 @@ struct InterfaceCard: View {
     }
 }
 
+// MARK: – Wi-Fi extras
+
+/// "Wi-Fi 6E" capsule beside the SSID.
+private struct GenerationBadge: View {
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.15)))
+            .fixedSize()
+    }
+}
+
+/// The "More" / "Less" disclosure under a Wi-Fi card's address rows.
+private struct MoreToggle: View {
+    let expanded: Bool
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(expanded ? "Less" : "More")
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .semibold))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+            Spacer()
+        }
+        .font(.system(size: 10.5, weight: .medium))
+        .foregroundStyle(hovered ? .primary : .secondary)
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+        .contentShape(Rectangle())
+        .pointerStyle(.link)
+        .onHover { hovered = $0 }
+        .onTapGesture(perform: action)
+        .help(expanded ? "Hide Wi-Fi details" : "Show Wi-Fi details")
+    }
+}
+
+/// The Option-click Wi-Fi menu's diagnostic block. Rows whose value macOS will
+/// not give out (BSSID and country code before Location is granted) are left
+/// out rather than shown as "N/A".
+private struct WiFiDetailRows: View {
+    let wifi: WiFiDetails
+
+    var body: some View {
+        VStack(spacing: 0) {
+            optional("Security", wifi.security)
+            optional("BSSID",    wifi.bssid)
+            optional("Channel",  wifi.channelLabel)
+            optional("Country",  wifi.countryCode)
+            optional("RSSI",     wifi.rssi.map { "\($0) dBm" })
+            optional("Noise",    wifi.noise.map { "\($0) dBm" })
+            optional("Tx Rate",  wifi.txRate.map { "\(Int($0.rounded())) Mbps" })
+            optional("PHY",      phy)
+            optional("MCS",      wifi.mcsIndex.map(String.init))
+            optional("NSS",      wifi.spatialStreams.map(String.init))
+        }
+    }
+
+    /// "802.11ax (Wi-Fi 6E)", or just the IEEE name for pre-802.11n links.
+    private var phy: String? {
+        guard let label = wifi.phyLabel else { return nil }
+        guard let generation = wifi.generation else { return label }
+        return "\(label) (\(generation))"
+    }
+
+    @ViewBuilder
+    private func optional(_ label: String, _ value: String?) -> some View {
+        if let value {
+            InfoRow(label: label, value: value)
+        }
+    }
+}
+
 // MARK: – Detail rows
 
 private struct RowLabel: View {
@@ -152,9 +272,9 @@ private struct RowLabel: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, design: .monospaced))
+            .font(.system(size: 10, design: .monospaced))
             .foregroundStyle(.secondary)
-            .frame(width: 56, alignment: .leading)
+            .frame(width: 58, alignment: .leading)
     }
 }
 
@@ -163,13 +283,13 @@ private struct InfoRow: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             RowLabel(text: label)
             CopyableText(value: value)
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
     }
 }
 
@@ -177,9 +297,9 @@ private struct DNSRows: View {
     let servers: [String]
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             RowLabel(text: "DNS")
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Keyed by position: a manual DNS list can repeat a server, and
                 // duplicate `\.self` ids make SwiftUI's diffing undefined.
                 ForEach(Array(servers.prefix(3).enumerated()), id: \.offset) { _, s in
@@ -207,7 +327,8 @@ private struct CopyableText: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(value)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
                 .foregroundStyle(.primary)
                 .contentShape(Rectangle())
                 .onTapGesture { copy() }
@@ -215,7 +336,7 @@ private struct CopyableText: View {
 
             if copied {
                 Text("Copied")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
             }

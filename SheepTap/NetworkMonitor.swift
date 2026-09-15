@@ -170,12 +170,27 @@ actor InterfaceFetcher {
             return loaded
         }
     }
+
+    func wifiDetails(for names: [String]) -> [String: WiFiDetails] {
+        NetworkMonitor.loadWiFiDetails(for: names)
+    }
 }
 
 @Observable
 @MainActor
 final class NetworkMonitor {
     private(set) var interfaces: [NetworkInterface] = []
+    /// Live radio figures per Wi-Fi BSD name. Polled only while the menu is
+    /// open — nothing announces an RSSI or rate change.
+    private(set) var wifiDetails: [String: WiFiDetails] = [:]
+
+    private static let showWiFiDetailsKey = "SheepTap.showWiFiDetails"
+    /// The "More" disclosure under a Wi-Fi card. Remembered across launches so
+    /// someone who always wants the radio figures does not re-open it each time.
+    private(set) var showWiFiDetails = UserDefaults.standard.bool(forKey: showWiFiDetailsKey)
+
+    @ObservationIgnored private let locationGate = LocationGate()
+    @ObservationIgnored private var wifiPollTask: Task<Void, Never>?
 
     @ObservationIgnored private var notifyStore: SCDynamicStore?
     @ObservationIgnored private var runLoopSource: CFRunLoopSource?
@@ -187,7 +202,10 @@ final class NetworkMonitor {
     /// data stale instead of paying for a fetch. Set by the status-menu
     /// controller around the menu's lifetime.
     @ObservationIgnored var isVisible = false {
-        didSet { if isVisible && needsRefresh { refresh() } }
+        didSet {
+            if isVisible && needsRefresh { refresh() }
+            if isVisible { startWiFiPolling() } else { stopWiFiPolling() }
+        }
     }
     @ObservationIgnored private var needsRefresh = true
 
@@ -203,6 +221,65 @@ final class NetworkMonitor {
         needsRefresh = false
         startSCNotifications()
         startPathMonitor()
+        // Granting Location unlocks the SSID/BSSID in both CoreWLAN and the
+        // dynamic store, and neither posts a change notification for it.
+        locationGate.onChange = { [weak self] in
+            guard let self else { return }
+            self.refresh()
+            if self.isVisible { self.startWiFiPolling() }
+        }
+    }
+
+    func setShowWiFiDetails(_ show: Bool) {
+        showWiFiDetails = show
+        UserDefaults.standard.set(show, forKey: Self.showWiFiDetailsKey)
+        if show { locationGate.requestIfNeeded() }
+        onInterfacesChanged?()
+    }
+
+    // ── Wi-Fi radio polling (menu open only) ──────────────────────────────
+
+    private var wifiNames: [String] {
+        interfaces.compactMap { if case .wifi = $0.type { $0.name } else { nil } }
+    }
+
+    private func startWiFiPolling() {
+        // The first sample is taken synchronously so the menu opens at its
+        // final height instead of growing a frame later. CoreWLAN answers from
+        // airportd's cache in a few milliseconds.
+        applyWiFiDetails(Self.loadWiFiDetails(for: wifiNames))
+
+        wifiPollTask?.cancel()
+        wifiPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let names = self?.wifiNames else { return }
+                let fetched = await InterfaceFetcher.shared.wifiDetails(for: names)
+                guard !Task.isCancelled else { return }
+                self?.applyWiFiDetails(fetched)
+            }
+        }
+    }
+
+    private func stopWiFiPolling() {
+        wifiPollTask?.cancel()
+        wifiPollTask = nil
+    }
+
+    private func applyWiFiDetails(_ fetched: [String: WiFiDetails]) {
+        guard wifiDetails != fetched else { return }
+        wifiDetails = fetched
+        // A field turning up or vanishing (BSSID once Location is granted)
+        // changes the number of rows, so the menu has to remeasure.
+        onInterfacesChanged?()
+    }
+
+    nonisolated static func loadWiFiDetails(for names: [String]) -> [String: WiFiDetails] {
+        var result: [String: WiFiDetails] = [:]
+        for name in names {
+            result[name] = WiFiDetails.load(interfaceName: name)
+        }
+        return result
     }
 
     // Isolated to the main actor so it can touch the main-actor state it owns.
@@ -212,6 +289,7 @@ final class NetworkMonitor {
         pathMonitor.cancel()
         debounceTask?.cancel()
         refreshTask?.cancel()
+        wifiPollTask?.cancel()
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .defaultMode)
         }
@@ -236,6 +314,9 @@ final class NetworkMonitor {
             if self.interfaces != fetched {
                 self.interfaces = fetched
                 self.onInterfacesChanged?()
+                // A Wi-Fi interface that joined while the menu was closed would
+                // otherwise wait a full poll interval for its radio figures.
+                if self.isVisible { self.startWiFiPolling() }
             }
         }
     }
