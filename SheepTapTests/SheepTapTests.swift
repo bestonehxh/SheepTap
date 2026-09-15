@@ -6,6 +6,7 @@
 //
 
 import Testing
+import Security
 @testable import SheepTap
 
 struct SheepTapTests {
@@ -53,6 +54,17 @@ struct SheepTapTests {
             iface(.wifi(ssid: nil)), iface(.ethernet), iface(.vpn), iface(.other)
         ].map(\.sortRank)
         #expect(ranks == [0, 1, 2, 3])
+    }
+
+    /// Inside the App Sandbox, CoreWLAN reports no interfaces at all unless the
+    /// app holds the outgoing-network entitlement — the Wi-Fi details panel
+    /// silently vanished in build 9 for exactly this reason. These tests run
+    /// hosted in the app, so this reads the app's own signature.
+    @Test func hostAppCanReachCoreWLANFromTheSandbox() {
+        let task = SecTaskCreateFromSelf(nil)
+        let key = "com.apple.security.network.client" as CFString
+        let value = task.flatMap { SecTaskCopyValueForEntitlement($0, key, nil) }
+        #expect((value as? Bool) == true)
     }
 
     private func iface(_ type: NetworkInterface.InterfaceType) -> NetworkInterface {

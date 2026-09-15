@@ -12,7 +12,7 @@ servers, and MAC address**. Click any value to copy it to the clipboard.
 
 ## ⬇️ Download
 
-[![Download SheepTap for macOS](https://img.shields.io/badge/Download-SheepTap_9_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTap/releases/latest)
+[![Download SheepTap for macOS](https://img.shields.io/badge/Download-SheepTap_10_for_macOS-2ea44f?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/bestonehxh/SheepTap/releases/latest)
 
 **[Get the latest release →](https://github.com/bestonehxh/SheepTap/releases/latest)** — download the `.zip`, unzip, and drag **SheepTap.app** into `Applications`.
 
