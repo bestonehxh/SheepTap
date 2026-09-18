@@ -442,9 +442,20 @@ final class NetworkMonitor {
             var dns: [String] = []
 
             if let store {
-                let ifKey = "State:/Network/Interface/\(name)/IPv4" as CFString
-                if let dict = SCDynamicStoreCopyValue(store, ifKey) as? [String: Any],
-                   let gw = dict["Router"] as? String { gateway = gw }
+                // The DHCP/manual router lives on the service-level State key.
+                // The interface-level key only carries addresses/masks, so a
+                // non-primary interface (e.g. Wi-Fi while Ethernet is primary)
+                // showed "N/A" when we read only that one.
+                if let sid = topology.bsdToServiceID[name] {
+                    let svcKey = "State:/Network/Service/\(sid)/IPv4" as CFString
+                    if let dict = SCDynamicStoreCopyValue(store, svcKey) as? [String: Any],
+                       let gw = dict["Router"] as? String, !gw.isEmpty { gateway = gw }
+                }
+                if gateway == "N/A" {
+                    let ifKey = "State:/Network/Interface/\(name)/IPv4" as CFString
+                    if let dict = SCDynamicStoreCopyValue(store, ifKey) as? [String: Any],
+                       let gw = dict["Router"] as? String, !gw.isEmpty { gateway = gw }
+                }
 
                 // The global router belongs only to the primary interface.
                 // Assigning it to VPN/tunnel interfaces reported a false gateway.
