@@ -24,7 +24,7 @@ servers, and MAC address**. Click any value to copy it to the clipboard.
 
 ## The Sheep family 🐑
 
-SheepTap is one of seven small native macOS apps that share the same sheep icon set:
+SheepTap is one of eight small native macOS apps that share the same sheep icon set:
 
 |  | App | What it does |
 |---|---|---|
@@ -35,6 +35,7 @@ SheepTap is one of seven small native macOS apps that share the same sheep icon 
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepText/main/.github/icon.png?v=3" width="44" alt=""> | [SheepText](https://github.com/bestonehxh/SheepText) | Fast text editor with tree-sitter highlighting and a JavaScript plugin system |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepArt/main/.github/icon.png?v=3" width="44" alt=""> | [SheepArt](https://github.com/bestonehxh/SheepArt) | Screenshot annotation — draw, crop, layers, one-key background removal |
 | <img src="https://raw.githubusercontent.com/bestonehxh/SheepRadius/main/.github/icon.png?v=4" width="44" alt=""> | [SheepRadius](https://github.com/bestonehxh/SheepRadius) | RADIUS + LDAP lab for 802.1X, device logins and NAC — with a joinable Samba AD |
+| <img src="https://raw.githubusercontent.com/bestonehxh/SheepKey/main/.github/icon.png?v=1" width="44" alt=""> | [SheepKey](https://github.com/bestonehxh/SheepKey) | Mac shortcuts (⌘ as Ctrl) inside AnyDesk, TeamViewer and RustDesk |
 
 ## Features
 
