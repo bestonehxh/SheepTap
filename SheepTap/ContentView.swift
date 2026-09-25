@@ -15,6 +15,11 @@ struct ContentView: View {
     /// Closes the status menu after a tap opens System Settings. A custom view
     /// inside an `NSMenuItem` does not end menu tracking on its own.
     var dismissMenu: () -> Void = {}
+    /// Reports the laid-out height so the AppKit hosting view can match it in
+    /// the same layout pass. Measuring from AppKit a run-loop turn later left
+    /// one displayed frame with the new content centred in the old frame,
+    /// which showed as a flash every time the Wi-Fi details toggled.
+    var onHeightChange: (CGFloat) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,6 +45,9 @@ struct ContentView: View {
         }
         .frame(width: MenuMetrics.width)
         .padding(.vertical, 4)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            onHeightChange(height)
+        }
     }
 }
 

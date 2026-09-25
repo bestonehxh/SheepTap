@@ -93,6 +93,12 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
 
         super.init()
 
+        // SwiftUI reports its height as part of its own layout, so the frame
+        // and the content change in the same display frame. The measured
+        // fallback below still covers anything that path misses.
+        hostingView.rootView.onHeightChange = { [weak self] height in
+            self?.applyContentHeight(height)
+        }
         monitor.onInterfacesChanged = { [weak self] in
             self?.scheduleContentResize()
         }
@@ -160,11 +166,17 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
     private func resizeContent() {
         hostingView.invalidateIntrinsicContentSize()
         hostingView.layoutSubtreeIfNeeded()
-        let fittingSize = hostingView.fittingSize
-        hostingView.frame.size = NSSize(
-            width: MenuMetrics.width,
-            height: max(fittingSize.height, MenuMetrics.minHeight)
-        )
+        applyContentHeight(hostingView.fittingSize.height)
+    }
+
+    /// Sets the item view's frame from a content height. A no-op when the
+    /// height already matches: the Wi-Fi poll publishes new RSSI figures every
+    /// two seconds, and re-applying an unchanged frame plus `menu.update()`
+    /// each time made the open menu re-lay itself out for nothing.
+    private func applyContentHeight(_ contentHeight: CGFloat) {
+        let height = max(ceil(contentHeight), MenuMetrics.minHeight)
+        guard hostingView.frame.height != height else { return }
+        hostingView.frame.size = NSSize(width: MenuMetrics.width, height: height)
         menu.update()
     }
 
