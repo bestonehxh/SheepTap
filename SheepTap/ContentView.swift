@@ -94,8 +94,18 @@ struct InterfaceCard: View {
         return nil
     }
 
-    /// SSID and Wi-Fi generation share the line under the interface name.
-    private var hasSubtitle: Bool { displaySSID != nil || wifi?.generation != nil }
+    /// The line under the interface name: the SSID for Wi-Fi, the provider
+    /// ("FortiGate", "Tailscale") for a VPN.
+    private var subtitle: String? { displaySSID ?? interface.vpnProvider }
+
+    /// The subtitle and Wi-Fi generation share the line under the interface name.
+    private var hasSubtitle: Bool { subtitle != nil || wifi?.generation != nil }
+
+    /// The VPN client's own app icon, when it can be found on this Mac.
+    private var vpnAppIcon: NSImage? {
+        guard interface.type == .vpn else { return nil }
+        return VPNAppIcon.image(provider: interface.vpnProvider, bundleID: interface.vpnBundleID)
+    }
 
     var accentColor: Color {
         switch interface.type {
@@ -115,9 +125,24 @@ struct InterfaceCard: View {
                     Circle()
                         .fill(accentColor.opacity(iconHovered ? 0.3 : 0.15))
                         .frame(width: 40, height: 40)
-                    Image(systemName: interface.icon)
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(accentColor)
+                    if let vpnAppIcon {
+                        // The client's icon, with a lock badge so the row
+                        // still reads as a VPN at a glance.
+                        Image(nsImage: vpnAppIcon)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 30, height: 30)
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 14, height: 14)
+                            .background(Circle().fill(accentColor))
+                            .frame(width: 40, height: 40, alignment: .bottomTrailing)
+                    } else {
+                        Image(systemName: interface.icon)
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(accentColor)
+                    }
                 }
                 .contentShape(Circle())
                 // `pointerStyle` restores the arrow itself when the menu closes
@@ -139,15 +164,16 @@ struct InterfaceCard: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // Fixed-height slot — shows the SSID for Wi-Fi, an equally tall
-                // gap otherwise. An invisible placeholder sizes the slot to the
-                // font's real line height; the old 8-point frame let a 12-point
-                // label spill over the interface name above it.
+                // Fixed-height slot — shows the SSID for Wi-Fi or the provider
+                // for a VPN, an equally tall gap otherwise. An invisible
+                // placeholder sizes the slot to the font's real line height;
+                // the old 8-point frame let a 12-point label spill over the
+                // interface name above it.
                 HStack(spacing: 5) {
                     // The blank placeholder is only for sizing an empty slot;
                     // beside a lone badge it would push the badge off-centre.
-                    if displaySSID != nil || wifi?.generation == nil {
-                        Text(displaySSID ?? " ")
+                    if subtitle != nil || wifi?.generation == nil {
+                        Text(subtitle ?? " ")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

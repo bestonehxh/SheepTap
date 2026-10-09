@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         configureLoginItem()
         statusController = StatusMenuController(monitor: monitor)
+        AppUpdater.startUnlessTesting()
     }
 
     private func configureLoginItem() {
@@ -126,6 +127,17 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
         contentItem.view = hostingView
         menu.addItem(contentItem)
 
+        // The in-app updater. SheepTap has no app menu or Settings window (it is a
+        // menu-bar accessory), so its update controls live here, above Quit.
+        menu.addItem(.separator())
+        let checkItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        checkItem.target = self
+        menu.addItem(checkItem)
+
         // The app runs as an accessory (no Dock icon), so without this there was
         // no way to quit it short of Activity Monitor.
         menu.addItem(.separator())
@@ -145,6 +157,10 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
 
         resizeContent()
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        AppUpdater.shared.checkNow()
     }
 
     func menuWillOpen(_ menu: NSMenu) {

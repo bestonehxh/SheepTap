@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import SystemConfiguration
 import Network
 import Darwin
@@ -21,6 +22,12 @@ nonisolated struct NetworkInterface: Identifiable, Equatable, Sendable {
     /// the interface belongs to a configured network service. Tunnels created
     /// by Network Extension VPNs have none.
     var serviceID: String? = nil
+    /// The product behind a VPN tunnel ("FortiGate", "Tailscale", or the
+    /// service's own name), when `VPNProvider` can tell.
+    var vpnProvider: String? = nil
+    /// The Network Extension provider's bundle ID behind a VPN tunnel
+    /// (`com.fortinet.forticlient.macos.vpn`), used to find its app's icon.
+    var vpnBundleID: String? = nil
 
     enum InterfaceType: Equatable, Sendable {
         case wifi(ssid: String?)
@@ -109,6 +116,14 @@ nonisolated struct InterfaceTopology: Sendable {
     var ethernetNames: Set<String> = []
     var macAddresses: [String: String] = [:]
     var bsdToServiceID: [String: String] = [:]
+    /// Service ID → the name shown in System Settings. Covers built-in VPN
+    /// services, whose tunnel (`ppp0`, `ipsec0`) has no BSD name until it is up
+    /// and so never appears in `bsdToServiceID`.
+    var serviceNames: [String: String] = [:]
+    /// Service ID → the client's bundle ID, for Network Extension VPNs. This is
+    /// what `scutil --nc list` prints as `[VPN:com.fortinet…]`, and it is the
+    /// only reliable name: FortiClient calls its configuration just "VPN".
+    var serviceVPNBundleIDs: [String: String] = [:]
 
     static func load() -> InterfaceTopology {
         var topology = InterfaceTopology()
@@ -133,6 +148,21 @@ nonisolated struct InterfaceTopology: Sendable {
         if let prefs = SCPreferencesCreate(nil, "SheepTap" as CFString, nil),
            let allServices = SCNetworkServiceCopyAll(prefs) as? [SCNetworkService] {
             for svc in allServices {
+                if let sid = SCNetworkServiceGetServiceID(svc) as String?,
+                   let name = SCNetworkServiceGetName(svc) as String? {
+                    topology.serviceNames[sid] = name
+                }
+                // A VPN service's interface is a "VPN" wrapper whose inner
+                // interface type is the provider's bundle ID. The SDK keeps
+                // `kSCNetworkInterfaceTypeVPN` private, so its value is spelled
+                // out — the same "VPN" that `scutil --nc list` prints.
+                if let sid = SCNetworkServiceGetServiceID(svc) as String?,
+                   let outer = SCNetworkServiceGetInterface(svc),
+                   SCNetworkInterfaceGetInterfaceType(outer) as String? == "VPN",
+                   let inner = SCNetworkInterfaceGetInterface(outer),
+                   let bundleID = SCNetworkInterfaceGetInterfaceType(inner) as String? {
+                    topology.serviceVPNBundleIDs[sid] = bundleID
+                }
                 guard let iface = SCNetworkServiceGetInterface(svc),
                       let bsd = SCNetworkInterfaceGetBSDName(iface) as String? else { continue }
                 if let sid = SCNetworkServiceGetServiceID(svc) as String? {
@@ -162,8 +192,8 @@ actor InterfaceFetcher {
         cachedTopology = nil
     }
 
-    func fetch() -> [NetworkInterface] {
-        NetworkMonitor.fetchInterfaces {
+    func fetch(runningBundleIDs: Set<String>) -> [NetworkInterface] {
+        NetworkMonitor.fetchInterfaces(runningBundleIDs: runningBundleIDs) {
             if let cachedTopology { return cachedTopology }
             let loaded = InterfaceTopology.load()
             cachedTopology = loaded
@@ -217,7 +247,7 @@ final class NetworkMonitor {
         // Seed the first menu synchronously. The old asynchronous first fetch
         // left the hosting view at its 120-point placeholder height, causing
         // the actual rows to be clipped/reordered when the menu opened quickly.
-        interfaces = Self.fetchInterfaces { .load() }
+        interfaces = Self.fetchInterfaces(runningBundleIDs: Self.runningBundleIDs()) { .load() }
         needsRefresh = false
         startSCNotifications()
         startPathMonitor()
@@ -305,8 +335,10 @@ final class NetworkMonitor {
         // finish out of order and an older snapshot could overwrite a newer one.
         refreshTask?.cancel()
         needsRefresh = false
+        // Read here on the main actor: the running-app list is AppKit state.
+        let running = Self.runningBundleIDs()
         refreshTask = Task { [weak self] in
-            let fetched = await InterfaceFetcher.shared.fetch()
+            let fetched = await InterfaceFetcher.shared.fetch(runningBundleIDs: running)
             guard !Task.isCancelled, let self else { return }
             // Most events (a DHCP renewal that returns the same lease, a link
             // flap) produce byte-identical data. Assigning anyway would publish
@@ -319,6 +351,12 @@ final class NetworkMonitor {
                 if self.isVisible { self.startWiFiPolling() }
             }
         }
+    }
+
+    /// Bundle IDs of the running apps, which `VPNProvider` uses to name a
+    /// tunnel nothing else explains. Readable from inside the App Sandbox.
+    private static func runningBundleIDs() -> Set<String> {
+        Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
     }
 
     // Debounce rapid-fire events (e.g. DHCP sends several store updates in sequence)
@@ -340,8 +378,11 @@ final class NetworkMonitor {
 
     // ── NWPathMonitor: fires on interface up/down, WiFi join/leave ────────
     private func startPathMonitor() {
-        pathMonitor.pathUpdateHandler = { _ in
-            Task { @MainActor [weak self] in
+        // `weak` belongs on the outer closure: a capture list only on the inner
+        // Task left the handler holding `self` strongly, a retain cycle through
+        // `pathMonitor` (and the ImplicitStrongCapture warning).
+        pathMonitor.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor in
                 // A path change is the only event that can add or remove an
                 // adapter, so it is also the only one that invalidates the cache.
                 await InterfaceFetcher.shared.invalidateTopology()
@@ -398,7 +439,10 @@ final class NetworkMonitor {
 
     /// `topology` is a closure so the cheap `getifaddrs` pass can bail out before
     /// paying for the expensive System Configuration load when nothing is up.
-    nonisolated static func fetchInterfaces(topology: () -> InterfaceTopology) -> [NetworkInterface] {
+    nonisolated static func fetchInterfaces(
+        runningBundleIDs: Set<String> = [],
+        topology: () -> InterfaceTopology
+    ) -> [NetworkInterface] {
         let local = collectLocalAddresses()
         guard !local.ipData.isEmpty else { return [] }
         let topology = topology()
@@ -415,6 +459,10 @@ final class NetworkMonitor {
                 }
             }
         }
+
+        // Tunnels have no service in SCPreferences' BSD-name map, so their
+        // service is found through the dynamic store instead.
+        let tunnelServiceIDs = store.map { activeServiceIDsByInterface($0) } ?? [:]
 
         var primaryInterface: String?
         var primaryGateway: String?
@@ -463,8 +511,13 @@ final class NetworkMonitor {
                     gateway = primaryGateway
                 }
 
-                // DNS: service-level State key (effective DNS = DHCP or manual override)
-                if let sid = topology.bsdToServiceID[name] {
+                // DNS: service-level State key (effective DNS = DHCP or manual override).
+                // A VPN's service comes from the dynamic store — its DNS
+                // (MagicDNS, the FortiGate's resolvers) lives only there. Its
+                // `Router` is not used above: a tunnel reports its own address.
+                let dnsServiceID = topology.bsdToServiceID[name]
+                    ?? (ifType == .vpn ? tunnelServiceIDs[name] : nil)
+                if let sid = dnsServiceID {
                     let stateKey = "State:/Network/Service/\(sid)/DNS" as CFString
                     if let dict = SCDynamicStoreCopyValue(store, stateKey) as? [String: Any],
                        let srv = dict["ServerAddresses"] as? [String], !srv.isEmpty { dns = srv }
@@ -494,11 +547,73 @@ final class NetworkMonitor {
             ))
         }
 
+        if let store {
+            nameVPNProviders(in: &result, store: store, topology: topology,
+                             tunnelServiceIDs: tunnelServiceIDs,
+                             runningBundleIDs: runningBundleIDs)
+        }
+
         // A total order, so the result is independent of the (unordered)
         // dictionary iteration above. An unstable order here would make the
         // `interfaces != fetched` check in `refresh()` fire on identical data.
         result.sort { ($0.sortRank, $0.name) < ($1.sortRank, $1.name) }
         return result
+    }
+
+    /// BSD name → service ID for every active service. Each one — built-in or
+    /// Network Extension — publishes its interface under `InterfaceName` in
+    /// its State IPv4 key, the only link from a `utun` back to its service.
+    nonisolated private static func activeServiceIDsByInterface(_ store: SCDynamicStore) -> [String: String] {
+        var result: [String: String] = [:]
+        let pattern = "State:/Network/Service/[^/]+/IPv4" as CFString
+        guard let keys = SCDynamicStoreCopyKeyList(store, pattern),
+              let values = SCDynamicStoreCopyMultiple(store, keys, nil) as? [String: Any]
+        else { return result }
+        for (key, value) in values {
+            guard let dict = value as? [String: Any],
+                  let bsd = dict["InterfaceName"] as? String else { continue }
+            let parts = key.split(separator: "/")
+            if parts.count >= 4 { result[bsd] = String(parts[3]) }
+        }
+        return result
+    }
+
+    /// Fills in `vpnProvider` for the VPN rows.
+    nonisolated private static func nameVPNProviders(
+        in interfaces: inout [NetworkInterface],
+        store: SCDynamicStore,
+        topology: InterfaceTopology,
+        tunnelServiceIDs: [String: String],
+        runningBundleIDs: Set<String>
+    ) {
+        guard interfaces.contains(where: { $0.type == .vpn }) else { return }
+
+        func serviceID(for bsd: String) -> String? {
+            tunnelServiceIDs[bsd] ?? topology.bsdToServiceID[bsd]
+        }
+
+        func serviceName(for bsd: String) -> String? {
+            guard let sid = serviceID(for: bsd) else { return nil }
+            if let name = topology.serviceNames[sid] { return name }
+            let setupKey = "Setup:/Network/Service/\(sid)" as CFString
+            let dict = SCDynamicStoreCopyValue(store, setupKey) as? [String: Any]
+            return dict?["UserDefinedName"] as? String
+        }
+
+        func bundleID(for bsd: String) -> String? {
+            serviceID(for: bsd).flatMap { topology.serviceVPNBundleIDs[$0] }
+        }
+
+        let tunnels = interfaces.filter { $0.type == .vpn }.map {
+            VPNProvider.Tunnel(name: $0.name, ipAddress: $0.ipAddress, dns: $0.dns,
+                               serviceName: serviceName(for: $0.name),
+                               serviceBundleID: bundleID(for: $0.name))
+        }
+        let providers = VPNProvider.identify(tunnels, runningBundleIDs: runningBundleIDs)
+        for i in interfaces.indices where interfaces[i].type == .vpn {
+            interfaces[i].vpnProvider = providers[interfaces[i].name]
+            interfaces[i].vpnBundleID = bundleID(for: interfaces[i].name)
+        }
     }
 
     /// IPv4 addresses, netmasks and link-layer MACs via `getifaddrs` — cheap
@@ -574,7 +689,7 @@ final class NetworkMonitor {
         if isWiFi { return .wifi(ssid: wifiSSID) }
         if isEthernet { return .ethernet }
 
-        let vpnPrefixes = ["utun", "tun", "tap", "ppp", "ipsec"]
+        let vpnPrefixes = ["utun", "tun", "tap", "ppp", "ipsec", "gpd"]
         if vpnPrefixes.contains(where: name.hasPrefix) { return .vpn }
         return .other
     }
