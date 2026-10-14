@@ -542,7 +542,9 @@ final class NetworkMonitor {
                 subnetMask: data.subnet,
                 gateway: gateway,
                 dns: dns.isEmpty ? ["N/A"] : dns,
-                macAddress: local.macAddresses[name] ?? topology.macAddresses[name] ?? "N/A",
+                // SystemConfiguration first: since macOS 27, `getifaddrs` redacts
+                // link addresses to 02:00:00:00:00:00 for ordinary processes.
+                macAddress: topology.macAddresses[name] ?? local.macAddresses[name] ?? "N/A",
                 serviceID: topology.bsdToServiceID[name]
             ))
         }
@@ -639,7 +641,7 @@ final class NetworkMonitor {
             if let addr = cur.pointee.ifa_addr,
                addr.pointee.sa_family == UInt8(AF_LINK),
                let mac = macAddress(from: addr) {
-                result.macAddresses[name] = mac
+                if mac != "02:00:00:00:00:00" { result.macAddresses[name] = mac }
                 continue
             }
 
