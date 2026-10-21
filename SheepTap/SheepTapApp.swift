@@ -73,6 +73,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// What the menu-bar item draws, chosen under ☰ → Symbol in the status menu.
+enum StatusIconStyle: String, CaseIterable {
+    case ring
+    case ip
+
+    private static let defaultsKey = "SheepTap.statusIconStyle"
+
+    static var current: StatusIconStyle {
+        get {
+            UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .ring
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+    }
+
+    var menuTitle: String {
+        switch self {
+        case .ring: "Ring"
+        case .ip: "iP"
+        }
+    }
+
+    var image: NSImage {
+        switch self {
+        case .ring: .ringStatusIcon
+        case .ip: .ipStatusIcon
+        }
+    }
+}
+
 private final class StatusMenuController: NSObject, NSMenuDelegate {
     private let monitor: NetworkMonitor
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -81,6 +110,8 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
     // SwiftUI's structural diffing, so every interface update tore down and
     // rebuilt the whole subtree instead of updating the rows that changed.
     private let hostingView: NSHostingView<ContentView>
+    private var symbolItems: [NSMenuItem] = []
+    private var moreItem: NSMenuItem?
 
     init(monitor: NetworkMonitor) {
         self.monitor = monitor
@@ -110,9 +141,19 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
     private func configureStatusItem() {
         guard let button = statusItem.button else { return }
         statusItem.length = 24
-        button.image = NSImage.ipStatusIcon
+        button.image = StatusIconStyle.current.image
         button.imagePosition = .imageOnly
         statusItem.menu = menu
+    }
+
+    @objc private func selectStatusIcon(_ sender: NSMenuItem) {
+        guard let style = sender.representedObject as? String,
+              let selected = StatusIconStyle(rawValue: style) else { return }
+        StatusIconStyle.current = selected
+        statusItem.button?.image = selected.image
+        for item in symbolItems {
+            item.state = (item.representedObject as? String) == selected.rawValue ? .on : .off
+        }
     }
 
     private func configureMenu() {
@@ -127,34 +168,68 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
         contentItem.view = hostingView
         menu.addItem(contentItem)
 
-        // The in-app updater. SheepTap has no app menu or Settings window (it is a
-        // menu-bar accessory), so its update controls live here, above Quit.
+        // One ☰ row holds the app's own controls, so the panel ends with the
+        // network details instead of a list of settings. SheepTap has no app menu
+        // or Settings window (it is a menu-bar accessory), so they live here.
         menu.addItem(.separator())
+        let moreMenu = NSMenu()
+        moreMenu.autoenablesItems = false
+
+        // Symbol: which mark the menu-bar item shows. Remembered in UserDefaults,
+        // so a relaunch comes back with the same one.
+        let symbolMenu = NSMenu()
+        symbolMenu.autoenablesItems = false
+        for style in StatusIconStyle.allCases {
+            let item = NSMenuItem(
+                title: style.menuTitle,
+                action: #selector(selectStatusIcon(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.image = style.image
+            item.representedObject = style.rawValue
+            item.state = style == StatusIconStyle.current ? .on : .off
+            symbolMenu.addItem(item)
+            symbolItems.append(item)
+        }
+        let symbolItem = NSMenuItem(title: "Symbol", action: nil, keyEquivalent: "")
+        symbolItem.submenu = symbolMenu
+        moreMenu.addItem(symbolItem)
+
+        moreMenu.addItem(.separator())
         let checkItem = NSMenuItem(
             title: "Check for Updates…",
             action: #selector(checkForUpdates(_:)),
             keyEquivalent: ""
         )
         checkItem.target = self
-        menu.addItem(checkItem)
+        moreMenu.addItem(checkItem)
 
         // The app runs as an accessory (no Dock icon), so without this there was
-        // no way to quit it short of Activity Monitor.
-        menu.addItem(.separator())
+        // no way to quit it short of Activity Monitor. It lives under ☰ too, so
+        // the panel itself ends with the ☰ row.
+        moreMenu.addItem(.separator())
         let quitItem = NSMenuItem(
             title: "Quit",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
-        // macOS gives an item with no image of its own an automatic symbol in the
-        // leading icon column, and the one it picks for a terminate: action draws
-        // as a missing-glyph box here. An explicit transparent image claims the
-        // slot without drawing anything. This is unrelated to the trailing "⌘Q",
-        // which renders fine and is kept.
+        // macOS gives an item with no image of its own an automatic symbol, and
+        // the one it picks for terminate: draws as a missing-glyph box. A
+        // transparent image claims the slot without drawing anything.
         quitItem.image = .menuIconPlaceholder
         quitItem.target = NSApp
         quitItem.isEnabled = true
-        menu.addItem(quitItem)
+        moreMenu.addItem(quitItem)
+
+        // Just the three lines, in the place Quit used to have. They are drawn as
+        // the title (an image attachment), not as `image`: AppKit draws nothing
+        // for an item whose title is empty, image included.
+        let moreItem = NSMenuItem(title: "More", action: nil, keyEquivalent: "")
+        moreItem.attributedTitle = .menuHamburger(highlighted: false)
+        moreItem.submenu = moreMenu
+        menu.addItem(moreItem)
+        self.moreItem = moreItem
 
         resizeContent()
     }
@@ -163,7 +238,17 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
         AppUpdater.shared.checkNow()
     }
 
+    /// AppKit leaves an image inside a title untinted (a template one too), so
+    /// the ☰ is drawn in an explicit colour and swapped for white while its row
+    /// is highlighted, the way the menu recolours title text.
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard let moreItem, menu === moreItem.menu else { return }
+        moreItem.attributedTitle = .menuHamburger(highlighted: item === moreItem)
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
+        // Rebuilt per opening so the colour follows a light/dark switch.
+        moreItem?.attributedTitle = .menuHamburger(highlighted: false)
         // Tells the monitor the panel is on screen, so it starts honouring
         // network events again and picks up anything that changed while closed.
         monitor.isVisible = true
@@ -201,6 +286,40 @@ private final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 }
 
+private extension NSAttributedString {
+    /// The ☰ as menu-item text. Drawn by hand rather than with the
+    /// `line.3.horizontal` symbol, whose bars sit too close together at menu
+    /// size. Drawn in the menu's text colour, or white on the highlighted row
+    /// (see `menu(_:willHighlight:)`).
+    static func menuHamburger(highlighted: Bool) -> NSAttributedString {
+        let font = NSFont.menuFont(ofSize: 0)
+        let barWidth: CGFloat = 14, barHeight: CGFloat = 1.6, gap: CGFloat = 3.4
+        let size = NSSize(width: barWidth, height: barHeight * 3 + gap * 2)
+        let image = NSImage(size: size, flipped: false) { rect in
+            (highlighted ? NSColor.selectedMenuItemTextColor : NSColor.labelColor).set()
+            for i in 0..<3 {
+                let y = CGFloat(i) * (barHeight + gap)
+                NSBezierPath(
+                    roundedRect: NSRect(x: 0, y: y, width: rect.width, height: barHeight),
+                    xRadius: barHeight / 2, yRadius: barHeight / 2
+                ).fill()
+            }
+            return true
+        }
+        image.accessibilityDescription = "More"
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        // Centred on the cap height, where a title's letters sit.
+        attachment.bounds = NSRect(
+            x: 0, y: ((font.capHeight - size.height) / 2).rounded(),
+            width: size.width, height: size.height
+        )
+        let text = NSMutableAttributedString(attachment: attachment)
+        text.addAttribute(.font, value: font, range: NSRange(location: 0, length: text.length))
+        return text
+    }
+}
+
 private extension NSImage {
     /// A fully transparent 1-point image. See the Quit item for why.
     static var menuIconPlaceholder: NSImage {
@@ -217,7 +336,7 @@ private extension NSImage {
     ///
     /// Proportions follow the artwork: ring thickness ≈ 0.3 of the outer
     /// radius, dot diameter ≈ 0.39 of the outer diameter.
-    static var ipStatusIcon: NSImage {
+    static var ringStatusIcon: NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             NSColor.black.set()
@@ -235,6 +354,34 @@ private extension NSImage {
         }
         image.isTemplate = true
         image.accessibilityDescription = "SheepTap"
+        return image
+    }
+
+    /// The original "iP" lettering, restored as the alternative under Symbol.
+    /// Drawn through `NSImage(size:flipped:drawingHandler:)` so AppKit re-renders
+    /// it per backing scale factor; `lockFocus` baked in whichever scale happened
+    /// to be current when the status item was created.
+    static var ipStatusIcon: NSImage {
+        let size = NSSize(width: 21, height: 18)
+        let image = NSImage(size: size, flipped: false) { _ in
+            let text = "iP" as NSString
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 15.0, weight: .heavy),
+                .foregroundColor: NSColor.black,
+                .kern: -1.4
+            ]
+            let textSize = text.size(withAttributes: attributes)
+            text.draw(
+                at: NSPoint(
+                    x: size.width / 2.0 - textSize.width / 2.0,
+                    y: size.height / 2.0 - textSize.height / 2.0 - 1.2
+                ),
+                withAttributes: attributes
+            )
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "SheepTap IP"
         return image
     }
 }
